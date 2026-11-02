@@ -1,0 +1,69 @@
+import {firebaseConfig} from './config.js';
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
+import {getAuth,signInAnonymously,signInWithEmailAndPassword,signOut,onAuthStateChanged} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
+import {getFirestore,collection,addDoc,getDocs,serverTimestamp,query,orderBy,doc,setDoc,getDoc} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const roles={student:'학생',parent:'학부모',teacher:'교사'};let role='student',auth=null,db=null,rows=[];
+const configured= firebaseConfig.apiKey!=='REPLACE_ME' && firebaseConfig.projectId!=='REPLACE_ME';
+if(configured){const app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);$('#connection').textContent='Firebase 연결 설정됨';onAuthStateChanged(auth,u=>{if(!u?.isAnonymous&&u){$('#login-area').classList.add('hidden');$('#dashboard').classList.remove('hidden');loadResponses()}else{$('#login-area').classList.remove('hidden');$('#dashboard').classList.add('hidden')}})}else{$('#connection').textContent='배포 전 Firebase 설정 필요';$('#submit-message').textContent='현재 연결 설정이 없습니다. 배포 안내에 따라 Firebase를 연결해 주세요.'}
+$$('.tab').forEach(t=>t.addEventListener('click',()=>{const v=t.dataset.view;$$('.tab').forEach(x=>x.classList.toggle('active',x===t));$('#survey').classList.toggle('hidden',v==='admin');$('#admin').classList.toggle('hidden',v!=='admin');if(v!=='admin'){role=v;$('#role-caption').textContent=roles[role]+' 의견 작성';$('#school-level-label').classList.toggle('hidden',role!=='student');$('#survey-title').textContent=role==='student'?'우리 도서관을 어떻게 바꾸면 좋을까요?':role==='parent'?'학교도서관에 바라는 점을 들려주세요':'교육활동을 지원하는 도서관을 함께 구상해 주세요';$('#submit-message').textContent=''}}));
+$('#privacy-open').onclick=()=>$('#privacy').showModal();
+$('#survey-form').addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget;const v=Object.fromEntries(new FormData(f));if(!configured){$('#submit-message').textContent='Firebase 설정 후 제출 가능합니다.';return}if(![v.positive,v.negative,v.wish].some(x=>x.trim())){$('#submit-message').textContent='세 질문 중 적어도 하나에 답해주세요.';return}const btn=$('#submit');btn.disabled=true;$('#submit-message').textContent='제출 중…';try{if(!auth.currentUser||!auth.currentUser.isAnonymous){await signOut(auth);await signInAnonymously(auth)}const data={name:v.name.trim(),role,level:role==='student'?v.level:'',positive:v.positive.trim(),negative:v.negative.trim(),wish:v.wish.trim(),createdAt:serverTimestamp(),ownerUid:auth.currentUser.uid};await addDoc(collection(db,'responses'),data);f.reset();$('#submit-message').textContent='의견이 정상적으로 제출되었습니다. 감사합니다!'}catch(err){$('#submit-message').textContent='전송 실패: Firebase 설정·인증·보안 규칙을 확인해 주세요. ('+err.code+')'}finally{btn.disabled=false}});
+$('#login-form').addEventListener('submit',async e=>{e.preventDefault();if(!configured){$('#admin-message').textContent='Firebase 연결 설정이 없습니다.';return}try{await signOut(auth);await signInWithEmailAndPassword(auth,$('#email').value,$('#password').value);$('#admin-message').textContent=''}catch(err){$('#admin-message').textContent='로그인 실패: '+err.code}});
+$('#logout').onclick=async()=>{await signOut(auth);rows=[]};$('#refresh').onclick=loadResponses;$('#filter-role').onchange=render;$('#search').oninput=render;
+async function loadResponses(){try{$('#admin-message').textContent='응답 불러오는 중…';const snap=await getDocs(query(collection(db,'responses'),orderBy('createdAt','desc')));rows=snap.docs.map(d=>({id:d.id,...d.data()}));render();$('#admin-message').textContent=rows.length+'건의 응답을 불러왔습니다.'}catch(err){$('#admin-message').textContent='조회 권한이 없습니다. Firestore 규칙의 관리자 UID를 확인하세요. ('+err.code+')';$('#dashboard').classList.add('hidden')}}
+const topics=[['독서·열람',/독서|읽|책 읽|조용|정숙|열람/],['휴식·편안함',/휴식|쉬|편안|소파|쿠션|온돌|따뜻/],['모둠·수업',/모둠|수업|협력|토론|학습/],['장서·서가',/책이|도서|서가|장서|신간|자료/],['창작·미디어',/창작|만들|미디어|녹음|영상|제작/],['소음·환경',/시끄|소음|조명|온도|덥|춥|밝|냉난방/],['공간·좌석',/자리|좌석|공간|넓|좁|책상|의자/],['정보검색·기기',/컴퓨터|검색|태블릿|기기|와이파이/],['접근·동선',/위치|계단|출입|이동|동선|접근/]];
+function getCounts(data){return topics.map(([name,re])=>({name,n:data.filter(r=>re.test([r.positive,r.negative,r.wish].join(' '))).length})).sort((a,b)=>b.n-a.n)}
+function render(){const counts={student:0,parent:0,teacher:0};rows.forEach(r=>{if(r.role in counts)counts[r.role]++});$('#stats').innerHTML=[['전체',rows.length],['학생',counts.student],['학부모',counts.parent],['교사',counts.teacher]].map(([a,b])=>`<div class="stat"><strong>${b}</strong><span>${a} 응답</span></div>`).join('');const top=getCounts(rows).slice(0,5);const max=Math.max(1,...top.map(x=>x.n));$('#topics').replaceChildren(...top.map(x=>{const d=document.createElement('div');d.className='bar';const label=document.createElement('label');label.textContent=x.name;const track=document.createElement('div');track.className='track';const fill=document.createElement('div');fill.className='fill';fill.style.width=(x.n/max*100)+'%';track.append(fill);const n=document.createElement('small');n.textContent=x.n+'건';d.append(label,track,n);return d}));$('#network').replaceChildren(...getCounts(rows).filter(x=>x.n>0).map(x=>{const d=document.createElement('span');d.className='node';d.textContent=x.name+' ↔ 응답 '+x.n+'건';return d}));const r=$('#filter-role').value,term=$('#search').value.toLowerCase();const filtered=rows.filter(x=>(r==='all'||x.role===r)&&[x.name,x.positive,x.negative,x.wish].join(' ').toLowerCase().includes(term));const tbody=$('#records');tbody.replaceChildren(...filtered.map(x=>{const tr=document.createElement('tr');let date=x.createdAt?.toDate?.().toLocaleDateString('ko-KR')||'—';[date,roles[x.role]||'',x.name,x.positive,x.negative,x.wish].forEach(v=>{const td=document.createElement('td');td.textContent=v||'—';tr.append(td)});return tr}))}
+$('#export').onclick=()=>{const fields=['name','role','level','positive','negative','wish'];const csv='\ufeff'+[fields.join(','),...rows.map(x=>fields.map(k=>'"'+String(x[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='학교도서관_공간의견.csv';a.click();URL.revokeObjectURL(url)};
+
+
+// 공간 구성 모듈 — 관리자 계정의 Firestore 문서만 읽고 씁니다.
+const areaNames=['자료·열람','교수·학습','창작','소통','관리'];
+const areaColors=['#b6d7f2','#bfe7d3','#f5d3b8','#eee0b3','#d5d4eb'];
+const strategyWeights={balanced:[34,30,10,15,11],reading:[47,24,5,13,11],learning:[25,43,9,12,11],creative:[26,23,23,17,11]};
+let latestDesign=null;
+function getCondition(){
+  const vals=$('#class-sizes').value.split(/[ ,，
+]+/).map(x=>Number(x)).filter(x=>Number.isFinite(x)&&x>0);
+  return {classes:Math.max(0,Number($('#class-count').value)||0),sizes:vals,students:Math.max(0,Number($('#student-count').value)||0),area:Math.max(0,Number($('#floor-area').value)||0),budget:Math.max(0,Number($('#budget').value)||0),location:$('#library-location').value.trim(),structure:$('#library-structure').value.trim(),books:Math.max(0,Number($('#book-count').value)||0),seats:Math.max(0,Number($('#seat-count').value)||0),strategy:$('#design-strategy').value,notes:$('#design-notes').value.trim()};
+}
+$('#class-sizes').addEventListener('input',()=>{const values=$('#class-sizes').value.split(/[ ,，
+]+/).map(x=>Number(x)).filter(x=>x>0);if(values.length){$('#class-count').value=values.length;$('#student-count').value=values.reduce((a,b)=>a+b,0)}});
+function fillCondition(c){if(!c)return;const mapping={'class-count':c.classes,'class-sizes':c.sizes?.join(', '),'student-count':c.students,'floor-area':c.area,'budget':c.budget,'library-location':c.location,'library-structure':c.structure,'book-count':c.books,'seat-count':c.seats,'design-strategy':c.strategy,'design-notes':c.notes};for(const [id,v]of Object.entries(mapping)){if(v!==undefined&&v!==null)$('#'+id).value=v}}
+async function saveCondition(){if(!db||!auth?.currentUser||auth.currentUser.isAnonymous){$('#design-message').textContent='관리자 로그인이 필요합니다.';return}try{const conditions=getCondition();await setDoc(doc(db,'settings','school'),{...conditions,updatedAt:serverTimestamp()});$('#design-message').textContent='학교 조건을 저장했습니다.'}catch(e){$('#design-message').textContent='저장 실패: '+e.code}}
+$('#save-design').onclick=saveCondition;
+async function loadCondition(){try{const snap=await getDoc(doc(db,'settings','school'));if(snap.exists())fillCondition(snap.data())}catch(e){$('#design-message').textContent='학교 조건 조회 실패: '+e.code}}
+const oldLoadResponses=loadResponses;
+// 기존 설문 조회 직후, 동일 관리자가 저장한 공간 조건도 조회합니다.
+loadResponses=async function(){await oldLoadResponses();if(!$('#dashboard').classList.contains('hidden'))await loadCondition()};
+function calculateDesign(){const c=getCondition();if(c.area<=0){$('#design-message').textContent='면적을 먼저 입력하세요.';return null}
+ let w=[...strategyWeights[c.strategy]];const requested=rows.flatMap(r=>[r.positive,r.negative,r.wish]).join(' ');
+ const hits=[(/책|독서|서가|열람|자료/g),(/학습|수업|모둠|교사/g),(/만들|제작|미디어|창작/g),(/소통|휴식|소파|친구|놀이/g)];
+ let adjustment=hits.map(re=>(requested.match(re)||[]).length);if(rows.length)adjustment=adjustment.map(n=>Math.min(3,n/Math.max(1,rows.length)*1.5));else adjustment=[0,0,0,0];
+ for(let i=0;i<4;i++)w[i]+=adjustment[i];const sum=w.reduce((a,b)=>a+b,0);w=w.map(x=>x/sum*100);
+ const areas=areaNames.map((name,i)=>({name,percent:w[i],sqm:c.area*w[i]/100,mentions:Math.round(adjustment[i]*rows.length/1.5)}));
+ const constraints=[];if(!c.structure)constraints.push('구조 및 출입구 정보를 입력하지 않아 동선 검토 불가');if(!c.books)constraints.push('장서 수 미입력: 서가 수용 검토 불가');if(!c.seats)constraints.push('열람석 수 미입력: 이용 수용 검토 불가');if(!c.students)constraints.push('학생 수 미입력: 이용 규모 검토 불가');if(!c.budget)constraints.push('예산 미입력: 비용 충족 여부 미판정');else constraints.push('면적 배분은 실제 견적을 산정하지 않아 예산 내 시공 가능 여부 미판정');constraints.push('정확한 도면·출입문·창문·기둥·안전·접근성·통로 폭은 검증하지 않음');
+ return {conditions:c,areas,constraints,respondents:rows.length,createdAt:new Date().toISOString(),type:'concept-only'};
+}
+function makeSVGEl(tag,attrs={},txt){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))node.setAttribute(k,String(v));if(txt!==undefined)node.textContent=txt;return node}
+function drawNetwork(data){const svg=makeSVGEl('svg',{viewBox:'0 0 920 530',role:'img','aria-label':'학교도서관 공간 구성 행위자와 반영 및 제약 관계의 개념 네트워크'});const edges=[];const nodes=[];
+ function node(id,label,x,y,color){nodes.push({id,label,x,y,color})}function edge(a,b,type){edges.push({a,b,type})}
+ node('lib','공간 구성 시안',475,255,'#344b66');[['학생',95,75],['학부모',95,178],['교사',95,280],['사서교사',95,385]].forEach(([s,x,y])=>{node(s,s,x,y,'#d8d5ff');edge(s,'lib','support')});
+ [['면적',292,65],['예산',472,65],['구조',650,65],['장서·좌석',820,100]].forEach(([s,x,y])=>{node(s,s,x,y,'#f8d9ba');edge(s,'lib','limit')});
+ data.areas.forEach((a,i)=>{const id=a.name;node(id,`${id} ${a.percent.toFixed(0)}%`,145+i*156,460,'#d7ede4');edge('lib',id,'support')});
+ const map=Object.fromEntries(nodes.map(x=>[x.id,x]));for(const e of edges){const a=map[e.a],b=map[e.b];svg.append(makeSVGEl('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:e.type==='limit'?'#c85c54':'#528b79','stroke-width':2,'stroke-dasharray':e.type==='limit'?'6 5':''}))}
+ for(const n of nodes){svg.append(makeSVGEl('rect',{x:n.x-68,y:n.y-22,width:136,height:44,rx:10,fill:n.color,stroke:'#708090'}));svg.append(makeSVGEl('text',{x:n.x,y:n.y+4,'text-anchor':'middle','font-size':13,'font-weight':600,fill:'#203040'},n.label))}$('#ant-graph').replaceChildren(svg)}
+function renderDesign(d){
+ const svg=makeSVGEl('svg',{viewBox:'0 0 850 470',role:'img','aria-label':'5개 기능 영역을 사각형으로 나타낸 개략 공간 구성도',style:'width:100%;height:auto;min-height:300px'});
+ const top=d.areas[0].percent+d.areas[1].percent;const bottom=100-top;
+ const hTop=420*top/100,hBottom=420-hTop;
+ const boxes=[{x:25,y:25,w:800*d.areas[0].percent/top,h:hTop},{x:25+800*d.areas[0].percent/top,y:25,w:800*d.areas[1].percent/top,h:hTop}];
+ let x=25;for(let i=2;i<5;i++){let width=800*d.areas[i].percent/bottom;boxes.push({x,y:25+hTop,w:width,h:hBottom});x+=width}
+ d.areas.forEach((a,i)=>{const b=boxes[i];svg.append(makeSVGEl('rect',{x:b.x,y:b.y,width:b.w,height:b.h,fill:areaColors[i],stroke:'#314559','stroke-width':2}));svg.append(makeSVGEl('text',{x:b.x+b.w/2,y:b.y+b.h/2-9,'text-anchor':'middle','font-size':15,'font-weight':700,fill:'#162c41'},a.name));svg.append(makeSVGEl('text',{x:b.x+b.w/2,y:b.y+b.h/2+15,'text-anchor':'middle','font-size':13,fill:'#162c41'},a.sqm.toFixed(1)+'㎡'))});
+ svg.append(makeSVGEl('text',{x:420,y:464,'text-anchor':'middle','font-size':12,fill:'#485769'},'개념적 구획 — 출입구·동선·기둥 위치 미반영'));
+ $('#plan-graphic').replaceChildren(svg);
+ const summary=document.createElement('p');summary.textContent=`면적 ${d.conditions.area}㎡ · 예산 입력 ${d.conditions.budget}만원 · 응답 ${d.respondents}건 참고. 영역은 중첩·시간 공유 가능하며 비율은 설명용 초기 배분입니다.`;$('#plan-summary').replaceChildren(summary);
+ const ul=document.createElement('ul');for(const a of d.areas){const li=document.createElement('li');li.textContent=`반영 후보: ${a.name} — ${a.sqm.toFixed(1)}㎡ (${a.percent.toFixed(1)}%)`;ul.append(li)}for(const c of d.constraints){const li=document.createElement('li');li.textContent=`미검증·제약: ${c}`;ul.append(li)}$('#design-explain').replaceChildren(ul);drawNetwork(d);$('#design-message').textContent='개략 설계안과 설명용 관계망을 만들었습니다. 최종 현장 검토가 필요합니다.'}
+$('#generate-design').onclick=()=>{latestDesign=calculateDesign();if(latestDesign)renderDesign(latestDesign)};
+$('#design-export').onclick=()=>{if(!latestDesign)latestDesign=calculateDesign();if(!latestDesign)return;const blob=new Blob([JSON.stringify(latestDesign,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='school-library-space-design.json';a.click();URL.revokeObjectURL(url)};
