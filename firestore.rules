@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == 'REPLACE_WITH_ADMIN_UID';
+    }
+    match /responses/{responseId} {
+      allow create: if request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'anonymous'
+        && request.resource.data.keys().hasOnly(['name','role','level','positive','negative','wish','createdAt','ownerUid'])
+        && request.resource.data.keys().hasAll(['name','role','level','positive','negative','wish','createdAt','ownerUid'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && request.resource.data.role in ['student','parent','teacher']
+        && request.resource.data.level is string && request.resource.data.level.size() <= 40
+        && request.resource.data.positive is string && request.resource.data.positive.size() <= 1500
+        && request.resource.data.negative is string && request.resource.data.negative.size() <= 1500
+        && request.resource.data.wish is string && request.resource.data.wish.size() <= 1500
+        && request.resource.data.createdAt == request.time;
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
